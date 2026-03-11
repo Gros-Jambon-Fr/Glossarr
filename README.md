@@ -41,62 +41,52 @@ Glossarr then forwards the request to the real Skyhook, enriches the response wi
 - Docker & Docker Compose
 - A free [TVDB API key](https://thetvdb.com/api-information) — required if using TVDB
 - A free [TMDB Read Access Token](https://www.themoviedb.org/settings/api) — required if using TMDB
-- `openssl` — to generate TLS certificates
 
 ## Installation
 
-### 1. Clone the repository
+### 1. Create a `docker-compose.yml`
 
-```bash
-git clone https://github.com/Gros-Jambon-Fr/Glossarr.git
-cd Glossarr
-```
-
-### 2. Generate TLS certificates
-
-Run the provided script to generate a custom CA and a server certificate for `skyhook.sonarr.tv`:
-
-```bash
-bash generate-certs.sh
-```
-
-This creates a `certs/` directory containing:
-
-| File | Description |
-|---|---|
-| `certs/ca.crt` | The CA certificate — mount this into Sonarr so it trusts Glossarr |
-| `certs/server.crt` | The server certificate used by Glossarr |
-| `certs/server.key` | The server private key |
-
-> The certificates are valid for 10 years. Regenerate them at any time by running the script again.
-
-### 3. Configure environment variables
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your values. At minimum, set your API key(s) and language:
-
-```env
-TVDB_API_KEY=your_tvdb_api_key
-TMDB_API_KEY=your_tmdb_api_key
-LANGUAGE=fra
+```yaml
+services:
+  glossarr:
+    image: ghcr.io/gros-jambon-fr/glossarr:latest
+    container_name: glossarr
+    restart: unless-stopped
+    ports:
+      - "443:3443"
+      - "3000:3000"
+    environment:
+      - TVDB_API_KEY=your_tvdb_api_key
+      - TMDB_API_KEY=your_tmdb_api_key
+      - LANGUAGE=fra
+      - PRIMARY_TRANSLATION_SOURCE=tvdb
+      - SECONDARY_TRANSLATION_SOURCE=tmdb
+      - CERT_DIR=/certs
+    volumes:
+      - ./certs:/certs
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 ```
 
 See the [Configuration](#configuration) section for all available options.
 
-### 4. Start Glossarr
+### 2. Start Glossarr
 
 ```bash
 docker compose up -d
 ```
 
+On first startup, Glossarr automatically generates a custom CA and a TLS certificate for `skyhook.sonarr.tv` in the `./certs/` directory. No manual steps required.
+
 Glossarr listens on:
 - Port `3000` — HTTP (healthcheck)
 - Port `443` — HTTPS (Sonarr traffic)
 
-### 5. Integrate with Sonarr
+### 3. Integrate with Sonarr
 
 Add the following to your Sonarr `docker-compose.yml`:
 
@@ -175,7 +165,7 @@ Available modes:
 
 | Variable | Default | Description |
 |---|---|---|
-| `CERT_DIR` | _(none)_ | Path inside the container to the directory containing `server.crt` and `server.key`. Set automatically by the provided `docker-compose.yml`. |
+| `CERT_DIR` | _(none)_ | Path inside the container where TLS certificates are stored. If set and certificates are absent, they are generated automatically on first startup. |
 
 ## Health check
 
