@@ -1,0 +1,13 @@
+{
+  "name": "glossarr",
+  "version": "1.0.0",
+  "description": "HTTP proxy that translates Sonarr's Skyhook metadata into your language via TVDB and/or TMDB",
+  "main": "proxy.js",
+  "scripts": {
+    "start": "node proxy.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,21 @@
+services:
+  glossarr:
+    image: ghcr.io/gros-jambon-fr/glossarr:latest
+    # build: .  # uncomment to build locally instead
+    container_name: glossarr
+    restart: unless-stopped
+    ports:
+      - "443:3443"   # HTTPS — Sonarr traffic
+      - "3000:3000"  # HTTP  — healthcheck
+    env_file:
+      - .env
+    environment:
+      - CERT_DIR=/certs
+    volumes:
+      - ./certs:/certs:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

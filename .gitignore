@@ -1,0 +1,7 @@
+node_modules/
+
+# TLS certificates — generated locally, never committed
+certs/
+
+# Local environment variables
+.env
