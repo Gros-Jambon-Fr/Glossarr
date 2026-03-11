@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="logo.png" alt="Glossarr" width="420" />
+  <img src="logo.png" alt="Glossarr" width="280" />
 </p>
 
 <p align="center">
