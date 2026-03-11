@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  Translate Sonarr's show, season, and episode metadata into your language — transparently.
+  Translate Sonarr's show, season, and episode metadata into your language, using TVDB and/or TMDB as sources.
 </p>
 
 <p align="center">
