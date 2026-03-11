@@ -4,6 +4,7 @@ const https = require('https');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
 const LANGUAGE              = process.env.LANGUAGE                     || 'fra';
 const TVDB_API_KEY          = process.env.TVDB_API_KEY;
@@ -642,6 +643,38 @@ async function handleRequest(req, res) {
     console.error(`Error handling ${req.method} ${req.url}:`, err.message);
     res.writeHead(502, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: 'Bad gateway', detail: err.message }));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Génération automatique des certificats TLS si absents
+// ---------------------------------------------------------------------------
+
+if (CERT_DIR) {
+  const caKey  = path.join(CERT_DIR, 'ca.key');
+  const caCrt  = path.join(CERT_DIR, 'ca.crt');
+  const srvKey = path.join(CERT_DIR, 'server.key');
+  const srvCrt = path.join(CERT_DIR, 'server.crt');
+  const csrTmp = path.join(CERT_DIR, 'server.csr');
+  const sanTmp = path.join(CERT_DIR, 'san.cnf');
+
+  if (!fs.existsSync(srvCrt) || !fs.existsSync(srvKey)) {
+    console.log('TLS certificates not found — generating...');
+    fs.mkdirSync(CERT_DIR, { recursive: true });
+    fs.writeFileSync(sanTmp, 'subjectAltName=DNS:skyhook.sonarr.tv');
+    try {
+      execSync(`openssl genrsa -out "${caKey}" 4096 2>/dev/null`);
+      execSync(`openssl req -new -x509 -days 3650 -key "${caKey}" -out "${caCrt}" -subj "/CN=Glossarr CA"`);
+      execSync(`openssl genrsa -out "${srvKey}" 2048 2>/dev/null`);
+      execSync(`openssl req -new -key "${srvKey}" -out "${csrTmp}" -subj "/CN=skyhook.sonarr.tv"`);
+      execSync(`openssl x509 -req -days 3650 -in "${csrTmp}" -CA "${caCrt}" -CAkey "${caKey}" -CAcreateserial -out "${srvCrt}" -extfile "${sanTmp}"`);
+      console.log(`TLS certificates generated in ${CERT_DIR}`);
+      console.log(`  → ca.crt: mount this into Sonarr to trust Glossarr`);
+    } finally {
+      for (const f of [csrTmp, sanTmp, path.join(CERT_DIR, 'ca.srl')]) {
+        fs.rmSync(f, { force: true });
+      }
+    }
   }
 }
 
