@@ -1,8 +1,6 @@
 <p align="center">
-  <img src="logo.png" alt="Glossarr" width="350" />
+  <img src="logo.png" alt="Glossarr" width="420" />
 </p>
-
-<h1 align="center">Glossarr</h1>
 
 <p align="center">
   Translate Sonarr's show, season, and episode metadata into your language — transparently.
