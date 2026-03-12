@@ -32,6 +32,8 @@ Glossarr has **zero npm dependencies**. There is no `node_modules`, no third-par
 
 If you're evaluating whether to run this on your homelab, that's the shortest security audit you'll ever do.
 
+The TLS certificates are generated locally by `generate-certs.sh` using `openssl` — the private key never leaves your machine. The custom CA is scoped to `skyhook.sonarr.tv` only, so trusting it in Sonarr cannot be leveraged to intercept any other traffic.
+
 ## How it works
 
 Sonarr connects to `skyhook.sonarr.tv` over HTTPS to fetch metadata. Glossarr intercepts this traffic by:
