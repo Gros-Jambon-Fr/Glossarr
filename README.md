@@ -26,6 +26,12 @@ Sonarr fetches TV metadata from Skyhook, which is almost exclusively in English.
 - Zero npm dependencies — plain Node.js 20
 - Transparent passthrough for all other Skyhook routes
 
+## Security
+
+Glossarr has **zero npm dependencies**. There is no `node_modules`, no third-party package to audit, and no supply chain attack surface. The entire codebase is a single `proxy.js` file and a few shell scripts — readable end to end in a few minutes.
+
+If you're evaluating whether to run this on your homelab, that's the shortest security audit you'll ever do.
+
 ## How it works
 
 Sonarr connects to `skyhook.sonarr.tv` over HTTPS to fetch metadata. Glossarr intercepts this traffic by:
