@@ -131,6 +131,28 @@ Sonarr will now route all Skyhook requests through Glossarr.
 
 > **Port 443 conflict:** If port 443 is already in use on your host (e.g. by a reverse proxy), see [Advanced: TCP passthrough](#advanced-tcp-passthrough).
 
+## Anime support
+
+Glossarr has first-class support for anime. It automatically detects anime shows using the [Fribb/anime-lists](https://github.com/Fribb/anime-lists) mapping — a community-maintained project that maps TVDB IDs to AniList, Kitsu, AniDB, MAL, and more. All credit for this mapping goes to its contributors.
+
+When a show is detected as anime, Glossarr can route it through dedicated anime sources instead of TVDB/TMDB:
+
+- **[AniList](https://anilist.co)** — free, no API key required, supports English and Japanese
+- **[Kitsu](https://kitsu.io)** — free, no API key required, supports English and Japanese
+
+Both sources are fetched at the show level. Seasons and episodes continue to use TVDB/TMDB (AniList and Kitsu do not provide episode-level translations), but with the anime language applied.
+
+**Fallback chain for anime:**
+
+1. `ANIME_PRIMARY_SOURCE` in `ANIME_LANGUAGE`
+2. `ANIME_SECONDARY_SOURCE` in `ANIME_LANGUAGE`
+3. TVDB/TMDB in `LANGUAGE` (global fallback)
+4. AniList/Kitsu in English (guaranteed — Skyhook is never used for detected anime)
+
+> If `ANIME_PRIMARY_SOURCE` and `ANIME_SECONDARY_SOURCE` are not set, all shows — including anime — use the standard `PRIMARY`/`SECONDARY` sources. Anime detection has no effect.
+
+The anime mapping is downloaded from GitHub at container startup and cached in memory. To refresh it, restart the container.
+
 ## Configuration
 
 All configuration is done via environment variables passed to the Glossarr container.
