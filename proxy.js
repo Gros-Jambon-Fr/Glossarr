@@ -20,7 +20,7 @@ const EPISODE_OVERVIEW_MODE = process.env.EPISODE_OVERVIEW_MODE        || 'alway
 const CERT_DIR              = process.env.CERT_DIR;
 
 const PORT_HTTP  = 3000;
-const PORT_HTTPS = 3443;
+const PORT_HTTPS = parseInt(process.env.GLOSSARR_PORT, 10) || 3443;
 
 const needsTvdb = PRIMARY_SOURCE === 'tvdb' || SECONDARY_SOURCE === 'tvdb';
 const needsTmdb = PRIMARY_SOURCE === 'tmdb' || SECONDARY_SOURCE === 'tmdb';
