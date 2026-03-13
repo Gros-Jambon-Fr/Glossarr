@@ -18,6 +18,9 @@ const SEASON_OVERVIEW_MODE  = process.env.SEASON_OVERVIEW_MODE         || 'alway
 const EPISODE_TITLE_MODE    = process.env.EPISODE_TITLE_MODE           || 'native';
 const EPISODE_OVERVIEW_MODE = process.env.EPISODE_OVERVIEW_MODE        || 'always';
 const CERT_DIR              = process.env.CERT_DIR;
+const ANIME_PRIMARY_SOURCE   = process.env.ANIME_PRIMARY_SOURCE   || null;
+const ANIME_SECONDARY_SOURCE = process.env.ANIME_SECONDARY_SOURCE || null;
+const ANIME_LANGUAGE         = process.env.ANIME_LANGUAGE         || null; // si null, utilise LANGUAGE
 
 const PORT_HTTP  = 3000;
 const PORT_HTTPS = parseInt(process.env.GLOSSARR_PORT, 10) || 3443;
@@ -32,6 +35,114 @@ if (needsTvdb && !TVDB_API_KEY) {
 if (needsTmdb && !TMDB_API_KEY) {
   console.error('TMDB_API_KEY is required when TRANSLATION_SOURCE includes tmdb');
   process.exit(1);
+}
+
+const VALID_ANIME_SOURCES = ['anilist', 'kitsu'];
+if (ANIME_PRIMARY_SOURCE   && !VALID_ANIME_SOURCES.includes(ANIME_PRIMARY_SOURCE)) {
+  console.error(`Invalid ANIME_PRIMARY_SOURCE: "${ANIME_PRIMARY_SOURCE}". Valid values: ${VALID_ANIME_SOURCES.join(', ')}`);
+  process.exit(1);
+}
+if (ANIME_SECONDARY_SOURCE && !VALID_ANIME_SOURCES.includes(ANIME_SECONDARY_SOURCE)) {
+  console.error(`Invalid ANIME_SECONDARY_SOURCE: "${ANIME_SECONDARY_SOURCE}". Valid values: ${VALID_ANIME_SOURCES.join(', ')}`);
+  process.exit(1);
+}
+
+// ---------------------------------------------------------------------------
+// Anime mapping — chargement au démarrage depuis Fribb/anime-lists
+// Map tvdb_id (int) → { anilist_id, kitsu_id }
+// ---------------------------------------------------------------------------
+
+const animeMap = new Map();
+
+async function loadAnimeMapping() {
+  try {
+    const res = await fetch('https://raw.githubusercontent.com/Fribb/anime-lists/master/anime-list-full.json');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    for (const entry of data) {
+      if (entry.type === 'TV' && entry.tvdb_id) {
+        animeMap.set(entry.tvdb_id, {
+          anilist_id: entry.anilist_id ?? null,
+          kitsu_id:   entry.kitsu_id   ?? null,
+        });
+      }
+    }
+    console.log(`Anime mapping loaded: ${animeMap.size} entries`);
+  } catch (err) {
+    console.warn('Failed to load anime mapping — ANIME_* sources disabled:', err.message);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AniList — traduction anime
+// Retourne { name, overview, source: 'anilist' } ou null
+// ---------------------------------------------------------------------------
+
+async function getAnilistTranslation(anilistId, lang) {
+  try {
+    const res = await fetch('https://graphql.anilist.co', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: `query($id:Int){Media(id:$id,type:ANIME){title{romaji english native}description}}`,
+        variables: { id: anilistId },
+      }),
+    });
+    if (!res.ok) return null;
+
+    const { data } = await res.json();
+    const media = data?.Media;
+    if (!media) return null;
+
+    // AniList supporte uniquement eng (english/romaji) et jpn (native)
+    // Pour toute autre langue, on retourne null pour laisser le fallback TVDB/TMDB prendre le relais
+    const effectiveLangIso1 = LANG_MAP[lang]?.iso1 ?? lang.slice(0, 2);
+    if (effectiveLangIso1 !== 'en' && effectiveLangIso1 !== 'ja') return null;
+
+    const title = media.title;
+    const name = lang === 'jpn'
+      ? (title.native || title.romaji || title.english)
+      : (title.english || title.romaji);
+
+    const overview = media.description?.replace(/<[^>]+>/g, '').trim() || null;
+
+    return { name: name || null, overview, source: 'anilist' };
+  } catch (err) {
+    console.warn(`AniList translation failed for anilistId ${anilistId}:`, err.message);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Kitsu — traduction anime
+// Retourne { name, overview, source: 'kitsu' } ou null
+// ---------------------------------------------------------------------------
+
+async function getKitsuTranslation(kitsuId, lang) {
+  try {
+    const res = await fetch(`https://kitsu.io/api/edge/anime/${kitsuId}`);
+    if (!res.ok) return null;
+
+    const { data } = await res.json();
+    const attrs = data?.attributes;
+    if (!attrs) return null;
+
+    // Kitsu supporte uniquement eng (titles.en) et jpn (titles.ja_jp)
+    // Pour toute autre langue, on retourne null pour laisser le fallback TVDB/TMDB prendre le relais
+    const effectiveLangIso1 = LANG_MAP[lang]?.iso1 ?? lang.slice(0, 2);
+    if (effectiveLangIso1 !== 'en' && effectiveLangIso1 !== 'ja') return null;
+
+    const name = lang === 'jpn'
+      ? (attrs.titles?.ja_jp || attrs.titles?.en_jp || attrs.canonicalTitle)
+      : (attrs.titles?.en    || attrs.titles?.en_jp || attrs.canonicalTitle);
+
+    const overview = attrs.synopsis || attrs.description || null;
+
+    return { name: name || null, overview, source: 'kitsu' };
+  } catch (err) {
+    console.warn(`Kitsu translation failed for kitsuId ${kitsuId}:`, err.message);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -212,15 +323,15 @@ async function getTvdbSeasonIds(tvdbId) {
 // TVDB — traduction saison
 // ---------------------------------------------------------------------------
 
-async function getTvdbSeasonTranslation(seasonId) {
+async function getTvdbSeasonTranslation(seasonId, lang = LANGUAGE) {
   try {
     const token = await getTvdbToken();
     const res = await fetch(
-      `https://api4.thetvdb.com/v4/seasons/${seasonId}/translations/${LANGUAGE}`,
+      `https://api4.thetvdb.com/v4/seasons/${seasonId}/translations/${lang}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
 
-    if (res.status === 401) { tvdbToken = null; return getTvdbSeasonTranslation(seasonId); }
+    if (res.status === 401) { tvdbToken = null; return getTvdbSeasonTranslation(seasonId, lang); }
     if (!res.ok) return null;
 
     const { data } = await res.json();
@@ -235,16 +346,16 @@ async function getTvdbSeasonTranslation(seasonId) {
 // TVDB — traduction épisode
 // ---------------------------------------------------------------------------
 
-async function getTvdbEpisodeTranslation(episodeId) {
+async function getTvdbEpisodeTranslation(episodeId, lang = LANGUAGE) {
   try {
     const token = await getTvdbToken();
     const res = await fetch(
-      `https://api4.thetvdb.com/v4/episodes/${episodeId}/translations/${LANGUAGE}`,
+      `https://api4.thetvdb.com/v4/episodes/${episodeId}/translations/${lang}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
 
     if (res.status === 404) return null;
-    if (res.status === 401) { tvdbToken = null; return getTvdbEpisodeTranslation(episodeId); }
+    if (res.status === 401) { tvdbToken = null; return getTvdbEpisodeTranslation(episodeId, lang); }
     if (!res.ok) return null;
 
     const { data } = await res.json();
@@ -293,7 +404,7 @@ async function getTmdbTranslation(tvdbId) {
 // TMDB — traduction saison
 // ---------------------------------------------------------------------------
 
-async function getTmdbSeasonTranslation(tmdbId, seasonNumber) {
+async function getTmdbSeasonTranslation(tmdbId, seasonNumber, iso1 = langIso1) {
   try {
     const res = await fetch(
       `https://api.themoviedb.org/3/tv/${tmdbId}/season/${seasonNumber}/translations`,
@@ -302,7 +413,7 @@ async function getTmdbSeasonTranslation(tmdbId, seasonNumber) {
     if (!res.ok) return null;
 
     const { translations } = await res.json();
-    const langTrans = translations?.find(t => t.iso_639_1 === langIso1);
+    const langTrans = translations?.find(t => t.iso_639_1 === iso1);
     return { name: langTrans?.data?.name || null, overview: langTrans?.data?.overview || null };
   } catch (err) {
     console.warn(`TMDB season translation fetch failed (tmdbId ${tmdbId}, season ${seasonNumber}):`, err.message);
@@ -314,7 +425,7 @@ async function getTmdbSeasonTranslation(tmdbId, seasonNumber) {
 // TMDB — traduction épisode
 // ---------------------------------------------------------------------------
 
-async function getTmdbEpisodeTranslation(tmdbId, seasonNumber, episodeNumber) {
+async function getTmdbEpisodeTranslation(tmdbId, seasonNumber, episodeNumber, iso1 = langIso1) {
   try {
     const res = await fetch(
       `https://api.themoviedb.org/3/tv/${tmdbId}/season/${seasonNumber}/episode/${episodeNumber}/translations`,
@@ -323,7 +434,7 @@ async function getTmdbEpisodeTranslation(tmdbId, seasonNumber, episodeNumber) {
     if (!res.ok) return null;
 
     const { translations } = await res.json();
-    const langTrans = translations?.find(t => t.iso_639_1 === langIso1);
+    const langTrans = translations?.find(t => t.iso_639_1 === iso1);
     return { name: langTrans?.data?.name || null, overview: langTrans?.data?.overview || null };
   } catch (err) {
     console.warn(`TMDB episode translation fetch failed (tmdbId ${tmdbId}, S${seasonNumber}E${episodeNumber}):`, err.message);
@@ -381,7 +492,7 @@ async function getTmdbEpisodeDefault(tmdbId, seasonNumber, episodeNumber) {
 // Chaîne : primary (fr) → secondary (fr) → primary (défaut) → secondary (défaut)
 // ---------------------------------------------------------------------------
 
-async function getTranslationData(tvdbId) {
+async function getTvdbTmdbTranslationData(tvdbId) {
   const primaryFn   = PRIMARY_SOURCE   === 'tvdb' ? getTvdbTranslation : getTmdbTranslation;
   const secondaryFn = SECONDARY_SOURCE === 'tvdb' ? getTvdbTranslation :
                       SECONDARY_SOURCE === 'tmdb' ? getTmdbTranslation : null;
@@ -446,6 +557,67 @@ async function getTranslationData(tvdbId) {
 }
 
 // ---------------------------------------------------------------------------
+// getTranslationData — point d'entrée principal
+// Anime détecté + ANIME_* configuré → chaîne anime avec fallback TVDB/TMDB
+// Sinon → chaîne TVDB/TMDB standard
+// ---------------------------------------------------------------------------
+
+function makeAnimeFn(source, animeEntry, lang) {
+  if (source === 'anilist' && animeEntry.anilist_id) return () => getAnilistTranslation(animeEntry.anilist_id, lang);
+  if (source === 'kitsu'   && animeEntry.kitsu_id)   return () => getKitsuTranslation(animeEntry.kitsu_id, lang);
+  return null;
+}
+
+async function getTranslationData(tvdbId) {
+  if ((ANIME_PRIMARY_SOURCE || ANIME_SECONDARY_SOURCE) && animeMap.size > 0) {
+    const animeEntry = animeMap.get(parseInt(tvdbId, 10));
+    if (animeEntry) {
+      const effectiveLang = ANIME_LANGUAGE || LANGUAGE;
+
+      // Étape 1 — sources anime avec la langue effective
+      const primaryFn   = makeAnimeFn(ANIME_PRIMARY_SOURCE,   animeEntry, effectiveLang);
+      const secondaryFn = makeAnimeFn(ANIME_SECONDARY_SOURCE, animeEntry, effectiveLang);
+
+      const [primary, secondary] = await Promise.all([
+        primaryFn?.()   ?? Promise.resolve(null),
+        secondaryFn?.() ?? Promise.resolve(null),
+      ]);
+
+      const merged = {
+        name:             primary?.name     ?? secondary?.name     ?? null,
+        overview:         primary?.overview ?? secondary?.overview ?? null,
+        originalLanguage: null,
+        source:           primary?.source   ?? secondary?.source   ?? null,
+      };
+
+      // Étape 2 — fallback TVDB/TMDB champ par champ
+      if (merged.name === null || merged.overview === null) {
+        const fallback = await getTvdbTmdbTranslationData(tvdbId);
+        if (merged.name     === null) merged.name             = fallback?.name             ?? null;
+        if (merged.overview === null) merged.overview         = fallback?.overview         ?? null;
+        if (!merged.originalLanguage) merged.originalLanguage = fallback?.originalLanguage ?? null;
+      }
+
+      // Étape 3 — défaut anime en anglais (jamais Skyhook pour les animes)
+      if (merged.name === null || merged.overview === null) {
+        const defPrimaryFn   = makeAnimeFn(ANIME_PRIMARY_SOURCE,   animeEntry, 'eng');
+        const defSecondaryFn = makeAnimeFn(ANIME_SECONDARY_SOURCE, animeEntry, 'eng');
+        const [defPrimary, defSecondary] = await Promise.all([
+          defPrimaryFn?.()   ?? Promise.resolve(null),
+          defSecondaryFn?.() ?? Promise.resolve(null),
+        ]);
+        if (merged.name     === null) merged.name     = defPrimary?.name     ?? defSecondary?.name     ?? null;
+        if (merged.overview === null) merged.overview = defPrimary?.overview ?? defSecondary?.overview ?? null;
+      }
+
+      return merged; // toujours retourner pour les animes, jamais Skyhook
+    }
+  }
+
+  return getTvdbTmdbTranslationData(tvdbId);
+}
+
+// ---------------------------------------------------------------------------
 // Résolution avec fallback pour saisons et épisodes
 // Chaîne : primary (fr) → secondary (fr) → primary (défaut) → secondary (défaut)
 // TVDB default = valeur Skyhook (déjà présente) → pas d'appel supplémentaire
@@ -475,12 +647,12 @@ async function mergeSubTranslations(primaryTransFn, secondaryTransFn, primaryDef
   return merged;
 }
 
-async function getSeasonTranslation(seasonNumber, tvdbSeasonIds, tmdbId) {
+async function getSeasonTranslation(seasonNumber, tvdbSeasonIds, tmdbId, lang = LANGUAGE, iso1 = langIso1) {
   const tvdbSeasonId = tvdbSeasonIds?.[seasonNumber] ?? null;
 
-  const tvdbTransFn   = tvdbSeasonId ? () => getTvdbSeasonTranslation(tvdbSeasonId)          : null;
-  const tmdbTransFn   = tmdbId       ? () => getTmdbSeasonTranslation(tmdbId, seasonNumber)   : null;
-  const tmdbDefaultFn = tmdbId       ? () => getTmdbSeasonDefault(tmdbId, seasonNumber)        : null;
+  const tvdbTransFn   = tvdbSeasonId ? () => getTvdbSeasonTranslation(tvdbSeasonId, lang)        : null;
+  const tmdbTransFn   = tmdbId       ? () => getTmdbSeasonTranslation(tmdbId, seasonNumber, iso1) : null;
+  const tmdbDefaultFn = tmdbId       ? () => getTmdbSeasonDefault(tmdbId, seasonNumber)           : null;
   // TVDB default = Skyhook, pas d'appel supplémentaire
 
   const primaryTransFn     = PRIMARY_SOURCE   === 'tvdb' ? tvdbTransFn   : tmdbTransFn;
@@ -493,10 +665,10 @@ async function getSeasonTranslation(seasonNumber, tvdbSeasonIds, tmdbId) {
   return mergeSubTranslations(primaryTransFn, secondaryTransFn, primaryDefaultFn, secondaryDefaultFn);
 }
 
-async function getEpisodeTranslation(episode, tmdbId) {
-  const tvdbTransFn   = episode.tvdbId ? () => getTvdbEpisodeTranslation(episode.tvdbId)                                                           : null;
-  const tmdbTransFn   = tmdbId         ? () => getTmdbEpisodeTranslation(tmdbId, episode.seasonNumber, episode.episodeNumber)                       : null;
-  const tmdbDefaultFn = tmdbId         ? () => getTmdbEpisodeDefault(tmdbId, episode.seasonNumber, episode.episodeNumber)                           : null;
+async function getEpisodeTranslation(episode, tmdbId, lang = LANGUAGE, iso1 = langIso1) {
+  const tvdbTransFn   = episode.tvdbId ? () => getTvdbEpisodeTranslation(episode.tvdbId, lang)                                                        : null;
+  const tmdbTransFn   = tmdbId         ? () => getTmdbEpisodeTranslation(tmdbId, episode.seasonNumber, episode.episodeNumber, iso1)                    : null;
+  const tmdbDefaultFn = tmdbId         ? () => getTmdbEpisodeDefault(tmdbId, episode.seasonNumber, episode.episodeNumber)                              : null;
   // TVDB default = Skyhook, pas d'appel supplémentaire
 
   const primaryTransFn     = PRIMARY_SOURCE   === 'tvdb' ? tvdbTransFn   : tmdbTransFn;
@@ -572,6 +744,11 @@ async function handleRequest(req, res) {
       const doEpisodeTitle    = EPISODE_TITLE_MODE    === 'always' || (EPISODE_TITLE_MODE    === 'native' && native);
       const doEpisodeOverview = EPISODE_OVERVIEW_MODE === 'always' || (EPISODE_OVERVIEW_MODE === 'native' && native);
 
+      // Langue effective pour saisons/épisodes — anime_language si anime, sinon language global
+      const isAnime       = (ANIME_PRIMARY_SOURCE || ANIME_SECONDARY_SOURCE) && animeMap.size > 0 && animeMap.has(parseInt(tvdbId, 10));
+      const subLang       = isAnime ? (ANIME_LANGUAGE || LANGUAGE) : LANGUAGE;
+      const subLangIso1   = LANG_MAP[subLang]?.iso1 ?? subLang.slice(0, 2);
+
       const needsSeasons  = (doSeasonTitle  || doSeasonOverview)  && Array.isArray(show.seasons)  && show.seasons.length  > 0;
       const needsEpisodes = (doEpisodeTitle || doEpisodeOverview) && Array.isArray(show.episodes) && show.episodes.length > 0;
 
@@ -584,7 +761,7 @@ async function handleRequest(req, res) {
         if (needsSeasons) {
           show.seasons = await Promise.all(
             show.seasons.map(async (season) => {
-              const t = await getSeasonTranslation(season.seasonNumber, tvdbSeasonIds, tmdbId);
+              const t = await getSeasonTranslation(season.seasonNumber, tvdbSeasonIds, tmdbId, subLang, subLangIso1);
               if (doSeasonTitle    && t?.name)     season.name     = t.name;
               if (doSeasonOverview && t?.overview) season.overview = t.overview;
               return season;
@@ -596,7 +773,7 @@ async function handleRequest(req, res) {
         if (needsEpisodes) {
           show.episodes = await Promise.all(
             show.episodes.map(async (episode) => {
-              const t = await getEpisodeTranslation(episode, tmdbId);
+              const t = await getEpisodeTranslation(episode, tmdbId, subLang, subLangIso1);
               if (doEpisodeTitle    && t?.name)     episode.title    = t.name;
               if (doEpisodeOverview && t?.overview) episode.overview = t.overview;
               return episode;
@@ -628,7 +805,7 @@ async function handleRequest(req, res) {
     // GET /health — healthcheck Docker
     if (req.method === 'GET' && url.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      return res.end(JSON.stringify({ status: 'ok', language: LANGUAGE, primary: PRIMARY_SOURCE, secondary: SECONDARY_SOURCE }));
+      return res.end(JSON.stringify({ status: 'ok', language: LANGUAGE, primary: PRIMARY_SOURCE, secondary: SECONDARY_SOURCE, anime_primary: ANIME_PRIMARY_SOURCE, anime_secondary: ANIME_SECONDARY_SOURCE, anime_language: ANIME_LANGUAGE || LANGUAGE }));
     }
 
     // Catch-all — passthrough transparent vers Skyhook
@@ -679,19 +856,27 @@ if (CERT_DIR) {
 }
 
 // ---------------------------------------------------------------------------
-// Démarrage des serveurs
+// Démarrage async — chargement du mapping anime si nécessaire, puis serveurs
 // ---------------------------------------------------------------------------
 
-// HTTP — toujours actif (healthcheck + mode dev)
-http.createServer(handleRequest).listen(PORT_HTTP, () => {
-  console.log(`HTTP  listening on :${PORT_HTTP}  (language: ${LANGUAGE}, primary: ${PRIMARY_SOURCE}, secondary: ${SECONDARY_SOURCE ?? 'none'}, show: ${SHOW_TITLE_MODE}/${SHOW_OVERVIEW_MODE}, season: ${SEASON_TITLE_MODE}/${SEASON_OVERVIEW_MODE}, episode: ${EPISODE_TITLE_MODE}/${EPISODE_OVERVIEW_MODE})`);
-});
+(async () => {
+  if (ANIME_PRIMARY_SOURCE || ANIME_SECONDARY_SOURCE) {
+    await loadAnimeMapping();
+  }
 
-// HTTPS — uniquement en prod quand CERT_DIR est défini
-if (CERT_DIR) {
-  const key  = fs.readFileSync(path.join(CERT_DIR, 'server.key'));
-  const cert = fs.readFileSync(path.join(CERT_DIR, 'server.crt'));
-  https.createServer({ key, cert }, handleRequest).listen(PORT_HTTPS, () => {
-    console.log(`HTTPS listening on :${PORT_HTTPS} (language: ${LANGUAGE}, primary: ${PRIMARY_SOURCE}, secondary: ${SECONDARY_SOURCE ?? 'none'}, show: ${SHOW_TITLE_MODE}/${SHOW_OVERVIEW_MODE}, season: ${SEASON_TITLE_MODE}/${SEASON_OVERVIEW_MODE}, episode: ${EPISODE_TITLE_MODE}/${EPISODE_OVERVIEW_MODE})`);
+  const logLine = `language: ${LANGUAGE}, primary: ${PRIMARY_SOURCE}, secondary: ${SECONDARY_SOURCE ?? 'none'}, anime: ${ANIME_PRIMARY_SOURCE ?? 'none'}/${ANIME_SECONDARY_SOURCE ?? 'none'}, show: ${SHOW_TITLE_MODE}/${SHOW_OVERVIEW_MODE}, season: ${SEASON_TITLE_MODE}/${SEASON_OVERVIEW_MODE}, episode: ${EPISODE_TITLE_MODE}/${EPISODE_OVERVIEW_MODE}`;
+
+  // HTTP — toujours actif (healthcheck + mode dev)
+  http.createServer(handleRequest).listen(PORT_HTTP, () => {
+    console.log(`HTTP  listening on :${PORT_HTTP}  (${logLine})`);
   });
-}
+
+  // HTTPS — uniquement en prod quand CERT_DIR est défini
+  if (CERT_DIR) {
+    const key  = fs.readFileSync(path.join(CERT_DIR, 'server.key'));
+    const cert = fs.readFileSync(path.join(CERT_DIR, 'server.crt'));
+    https.createServer({ key, cert }, handleRequest).listen(PORT_HTTPS, () => {
+      console.log(`HTTPS listening on :${PORT_HTTPS} (${logLine})`);
+    });
+  }
+})();
