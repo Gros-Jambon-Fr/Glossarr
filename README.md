@@ -1,9 +1,11 @@
 <p align="center">
-  <img src="logo.png" alt="Glossarr" width="280" />
+  <img src="logo.png" alt="Glossarr" width="180" />
 </p>
 
+<h1 align="center">Glossarr</h1>
+
 <p align="center">
-  Translate Sonarr's show, season, and episode metadata into your language, using TVDB and/or TMDB as sources.
+  Translate Sonarr's show, season, and episode metadata into your language — transparently.
 </p>
 
 <p align="center">
@@ -32,8 +34,6 @@ Glossarr has **zero npm dependencies**. There is no `node_modules`, no third-par
 
 If you're evaluating whether to run this on your homelab, that's the shortest security audit you'll ever do.
 
-The TLS certificates are generated locally by `generate-certs.sh` using `openssl` — the private key never leaves your machine. The custom CA is scoped to `skyhook.sonarr.tv` only, so trusting it in Sonarr cannot be leveraged to intercept any other traffic.
-
 ## How it works
 
 Sonarr connects to `skyhook.sonarr.tv` over HTTPS to fetch metadata. Glossarr intercepts this traffic by:
@@ -49,52 +49,62 @@ Glossarr then forwards the request to the real Skyhook, enriches the response wi
 - Docker & Docker Compose
 - A free [TVDB API key](https://thetvdb.com/api-information) — required if using TVDB
 - A free [TMDB Read Access Token](https://www.themoviedb.org/settings/api) — required if using TMDB
+- `openssl` — to generate TLS certificates
 
 ## Installation
 
-### 1. Create a `docker-compose.yml`
+### 1. Clone the repository
 
-```yaml
-services:
-  glossarr:
-    image: ghcr.io/gros-jambon-fr/glossarr:latest
-    container_name: glossarr
-    restart: unless-stopped
-    ports:
-      - "443:3443"
-      - "3000:3000"
-    environment:
-      - TVDB_API_KEY=your_tvdb_api_key
-      - TMDB_API_KEY=your_tmdb_api_key
-      - LANGUAGE=fra
-      - PRIMARY_TRANSLATION_SOURCE=tvdb
-      - SECONDARY_TRANSLATION_SOURCE=tmdb
-      - CERT_DIR=/certs
-    volumes:
-      - ./certs:/certs
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+```bash
+git clone https://github.com/Gros-Jambon-Fr/Glossarr.git
+cd Glossarr
+```
+
+### 2. Generate TLS certificates
+
+Run the provided script to generate a custom CA and a server certificate for `skyhook.sonarr.tv`:
+
+```bash
+bash generate-certs.sh
+```
+
+This creates a `certs/` directory containing:
+
+| File | Description |
+|---|---|
+| `certs/ca.crt` | The CA certificate — mount this into Sonarr so it trusts Glossarr |
+| `certs/server.crt` | The server certificate used by Glossarr |
+| `certs/server.key` | The server private key |
+
+> The certificates are valid for 10 years. Regenerate them at any time by running the script again.
+
+### 3. Configure environment variables
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` with your values. At minimum, set your API key(s) and language:
+
+```env
+TVDB_API_KEY=your_tvdb_api_key
+TMDB_API_KEY=your_tmdb_api_key
+LANGUAGE=fra
 ```
 
 See the [Configuration](#configuration) section for all available options.
 
-### 2. Start Glossarr
+### 4. Start Glossarr
 
 ```bash
 docker compose up -d
 ```
 
-On first startup, Glossarr automatically generates a custom CA and a TLS certificate for `skyhook.sonarr.tv` in the `./certs/` directory. No manual steps required.
-
 Glossarr listens on:
 - Port `3000` — HTTP (healthcheck)
-- Port `443` — HTTPS (Sonarr traffic)
+- Port `443` — HTTPS (Sonarr traffic, via `GLOSSARR_PORT=443` in the provided `docker-compose.yml`)
 
-### 3. Integrate with Sonarr
+### 5. Integrate with Sonarr
 
 Add the following to your Sonarr `docker-compose.yml`:
 
@@ -173,7 +183,8 @@ Available modes:
 
 | Variable | Default | Description |
 |---|---|---|
-| `CERT_DIR` | _(none)_ | Path inside the container where TLS certificates are stored. If set and certificates are absent, they are generated automatically on first startup. |
+| `CERT_DIR` | _(none)_ | Path inside the container to the directory containing `server.crt` and `server.key`. Set automatically by the provided `docker-compose.yml`. |
+| `GLOSSARR_PORT` | `3443` | HTTPS port Glossarr listens on. Set to `443` to expose Glossarr directly on the standard HTTPS port (useful when no reverse proxy is involved). |
 
 ## Health check
 
