@@ -25,6 +25,7 @@ Sonarr fetches TV metadata from Skyhook, which is almost exclusively in English.
 - Supports **TVDB** and **TMDB** as translation sources, with automatic field-level fallback
 - Granular per-field control: `always`, `never`, or `native` (translate only if the show's original language matches yours)
 - Dual-source support: fetch from both TVDB and TMDB in parallel, merge field by field
+- **Anime support** via [AniList](https://anilist.co) and/or [Kitsu](https://kitsu.io) — dedicated sources with their own language setting, auto-detected via the [anime-lists](https://github.com/Fribb/anime-lists) mapping
 - Zero npm dependencies — plain Node.js 20
 - Transparent passthrough for all other Skyhook routes
 
@@ -179,6 +180,28 @@ Available modes:
 
 > **Example:** With `LANGUAGE=fra` and `SHOW_TITLE_MODE=native`, a French show like *Les Revenants* will have its title translated, but *Breaking Bad* will keep its original title.
 
+### Anime sources
+
+Glossarr can detect anime automatically using the [Fribb/anime-lists](https://github.com/Fribb/anime-lists) mapping (loaded at startup) and route them through dedicated sources — [AniList](https://anilist.co) and/or [Kitsu](https://kitsu.io) — instead of TVDB/TMDB.
+
+Both sources are free and require no API key.
+
+| Variable | Default | Values | Description |
+|---|---|---|---|
+| `ANIME_PRIMARY_SOURCE` | _(none)_ | `anilist`, `kitsu` | Primary source for anime translations |
+| `ANIME_SECONDARY_SOURCE` | _(none)_ | `anilist`, `kitsu` | Fallback anime source if a field is missing from the primary |
+| `ANIME_LANGUAGE` | _(uses `LANGUAGE`)_ | `eng`, `jpn` | Language for anime sources. AniList and Kitsu only support English and Japanese — for any other language, Glossarr falls back to TVDB/TMDB automatically. |
+
+**How it works:**
+
+- If a show's TVDB ID is found in the anime-lists mapping, it is considered anime.
+- Anime shows use the `ANIME_*` sources and language for **all fields** (show, seasons, episodes).
+- If `ANIME_LANGUAGE` is not supported by AniList/Kitsu (e.g. `fra`), those sources return nothing and Glossarr falls back to TVDB/TMDB with the global `LANGUAGE`.
+- If no anime sources are configured, all shows (including anime) use the standard `PRIMARY`/`SECONDARY` sources.
+- For anime, Skyhook is never used as a final fallback — AniList/Kitsu defaults (English) are always preferred.
+
+> **Example:** With `LANGUAGE=fra`, `ANIME_PRIMARY_SOURCE=anilist`, `ANIME_LANGUAGE=eng` — regular shows get French metadata from TVDB/TMDB, anime gets English metadata from AniList.
+
 ### TLS
 
 | Variable | Default | Description |
@@ -193,7 +216,7 @@ GET /health
 ```
 
 ```json
-{ "status": "ok", "language": "fra", "primary": "tvdb", "secondary": "tmdb" }
+{ "status": "ok", "language": "fra", "primary": "tvdb", "secondary": "tmdb", "anime_primary": "anilist", "anime_secondary": null, "anime_language": "eng" }
 ```
 
 ## Advanced: TCP passthrough
